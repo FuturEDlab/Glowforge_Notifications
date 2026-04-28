@@ -3,6 +3,8 @@ import imaplib
 import base64
 from dotenv import load_dotenv
 from google_auth_oauthlib.flow import InstalledAppFlow
+import email
+from email.policy import default
 
 load_dotenv()
 
@@ -35,6 +37,9 @@ def connect_IMAP_login():
         print(f"Failed to connect: {e}")
         return None
 
+'''
+test function to list all mailboxes/folders in the account
+
 def check_inbox(imap):
     # This lists all available folders/labels
     status, mailboxes = imap.list()
@@ -44,11 +49,99 @@ def check_inbox(imap):
             print(mailbox.decode())
     else:
         print("Failed to retrieve mailboxes.")
+'''
+
+def fetch_latest_glowforge_email(imap):
+    """
+    searches for most recent email from Glowforge and returns raw message data
+    """
+    # 1. Select inbox (readonly=True ensures we don't mark as read automatically)
+    imap.select("INBOX", readonly=True)
+
+    # 2. Search for emails from Glowforge
+    # You can change 'FROM "Glowforge"' to specific subjects like 'SUBJECT "Appointment"'
+    status, messages = imap.search(None, 'FROM "Glowforge Sign-up"')
+
+    if status != 'OK' or not messages[0]:
+        print("No Glowforge emails found.")
+        return None
+
+    # 3. Get the ID of the latest email (the last one in the list)
+    message_ids = messages[0].split()
+    latest_id = message_ids[-1]
+
+    # 4. Fetch the raw RFC822 data
+    status, data = imap.fetch(latest_id, '(RFC822)')
+
+    if status == 'OK':
+        print(f"Successfully fetched email ID: {latest_id.decode()}")
+        return data
+    
+    return None
+
+def create_notification(raw_data):
+    """
+    Parses raw IMAP data using the email library and returns a 
+    Discord-ready dictionary payload.
+    """
+    # raw_data[0][1] contains the actual bytes of the email
+    raw_bytes = raw_data[0][1]
+    
+    # Use the email library to parse the bytes into a message object
+    msg = email.message_from_bytes(raw_bytes, policy=default)
+
+    subject = msg['subject'] or "No Subject"
+    sender = msg['from'] or "Unknown Sender"
+    
+    # Extract the body
+    # This looks for the plain text version of the email specifically
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                body = part.get_content()
+                break
+    else:
+        body = msg.get_content()
+
+    # Clean up and truncate the body for Discord (1024 char limit for field values)
+    clean_body = body.strip()
+    if len(clean_body) > 500:
+        clean_body = clean_body[:500] + "..."
+
+    # Structure the Discord Webhook Payload
+    notification = {
+        "username": "Glowforge Monitor",
+        "avatar_url": "https://i.imgur.com/your_logo_here.png", # Optional
+        "embeds": [{
+            "title": f"{subject}",
+            "color": 12960,  # GV Blue
+            "fields": [
+                {
+                    "name": "From",
+                    "value": sender,
+                    "inline": True
+                },
+                {
+                    "name": "Message Snippet",
+                    "value": clean_body if clean_body else "No plain text content found.",
+                    "inline": False
+                }
+            ],
+            "footer": {
+                "text": "Glowforge Real-time Updates"
+            }
+        }]
+    }
+
+    return notification
 
 if __name__ == "__main__":
     session = connect_IMAP_login()
     if session:
-        check_inbox(session)
-        # Always logout when finished
-        session.logout()
+        data = fetch_latest_glowforge_email(session)
+    if data:
+        notification = create_notification(data)
+        print(notification) # what we POST to the webhook
+    session.logout()
         
