@@ -3,6 +3,8 @@ import imaplib
 import base64
 from dotenv import load_dotenv
 from google_auth_oauthlib.flow import InstalledAppFlow
+import email
+from email.policy import default
 
 load_dotenv()
 
@@ -79,48 +81,56 @@ def fetch_latest_glowforge_email(imap):
 
 def create_notification(raw_data):
     """
-    parses raw IMAP fetch data (tuple) to extract key info 
-    and returns a formatted Discord payload without using the email library.
+    Parses raw IMAP data using the email library and returns a 
+    Discord-ready dictionary payload.
     """
-    # raw_data is usually the list returned by imap.fetch: [(b'1 (RFC822 {1234}', b'RawContent'), b')']
-    # We grab the actual content (the second element of the first tuple)
-    email_content = raw_data[0][1].decode('utf-8', errors='ignore')
+    # raw_data[0][1] contains the actual bytes of the email
+    raw_bytes = raw_data[0][1]
     
-    # Simple manual header parsing
-    lines = email_content.split('\r\n')
-    subject = "Unknown Subject"
-    sender = "Unknown Sender"
-    body_start_index = 0
+    # Use the email library to parse the bytes into a message object
+    msg = email.message_from_bytes(raw_bytes, policy=default)
 
-    for i, line in enumerate(lines):
-        if line.startswith("Subject: "):
-            subject = line.replace("Subject: ", "")
-        if line.startswith("From: "):
-            sender = line.replace("From: ", "")
-        # The body starts after the first completely empty line
-        if not line.strip() and body_start_index == 0:
-            body_start_index = i + 1
-            break
+    subject = msg['subject'] or "No Subject"
+    sender = msg['from'] or "Unknown Sender"
+    
+    # Extract the body
+    # This looks for the plain text version of the email specifically
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                body = part.get_content()
+                break
+    else:
+        body = msg.get_content()
 
-    # join the lines after header to get the body
-    raw_body = "\n".join(lines[body_start_index:])
-    # clean up simple whitespace and truncate for Discord
-    clean_body = raw_body.strip()[:400] + "..." if len(raw_body) > 400 else raw_body.strip()
+    # Clean up and truncate the body for Discord (1024 char limit for field values)
+    clean_body = body.strip()
+    if len(clean_body) > 500:
+        clean_body = clean_body[:500] + "..."
 
     # Structure the Discord Webhook Payload
     notification = {
         "username": "Glowforge Monitor",
+        "avatar_url": "https://i.imgur.com/your_logo_here.png", # Optional
         "embeds": [{
-            "title": "------New Appointment Notification------",
-            "description": f"**Subject:** {subject}\n**From:** {sender}",
+            "title": f"{subject}",
+            "color": 12960,  # GV Blue
             "fields": [
+                {
+                    "name": "From",
+                    "value": sender,
+                    "inline": True
+                },
                 {
                     "name": "Message Snippet",
                     "value": clean_body if clean_body else "No plain text content found.",
                     "inline": False
                 }
             ],
-            "color": 12960 # GV Blue
+            "footer": {
+                "text": "Glowforge Real-time Updates"
+            }
         }]
     }
 
