@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials 
 from google.auth.transport.requests import Request
+import requests
+import json
 import email
 from email.policy import default
 
@@ -158,12 +160,25 @@ def create_notification(raw_data):
 
     return notification
 
+def send_to_discord(payload):
+    webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+    response = requests.post(
+        webhook_url, 
+        data=json.dumps(payload),
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    if response.status_code == 204:
+        print("Notification sent successfully!")
+    else:
+        print(f"Failed to send: {response.status_code}, {response.text}")
+
 if __name__ == "__main__":
     session = connect_IMAP_login()
     if session:
         data = fetch_latest_glowforge_email(session)
     if data:
         notification = create_notification(data)
-        print(notification) # what we POST to the webhook
+        send_to_discord(notification) # what we POST to the webhook
     session.logout()
         
