@@ -1,8 +1,9 @@
 import os
 import imaplib
-import base64
 from dotenv import load_dotenv
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials 
+from google.auth.transport.requests import Request
 import email
 from email.policy import default
 
@@ -13,13 +14,35 @@ def connect_IMAP_login():
     
     creds_path = os.getenv('CREDENTIALS_PATH')
     user_email = os.getenv('USER_EMAIL')
+    token_path = 'token.json'
 
     flow = InstalledAppFlow.from_client_secrets_file(
         creds_path,
         SCOPES
     )
 
-    creds = flow.run_local_server(port=0)   # opens a browser for authentication
+    creds = None
+
+    # Check if token.json exists to skip login
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            # Refresh access token if expired 
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                creds_path,
+                SCOPES
+            )
+            # open a browser window for the user to log in and authorize access
+            creds = flow.run_local_server(port=0)
+            
+        # Save the credentials for the next run
+        with open(token_path, 'w') as token:
+            token.write(creds.to_json())
     
     # 1. Connect to the Gmail IMAP server
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -104,7 +127,7 @@ def create_notification(raw_data):
     else:
         body = msg.get_content()
 
-    # Clean up and truncate the body for Discord (1024 char limit for field values)
+    # Clean up and truncate for Discord (1024 char limit for field values)
     clean_body = body.strip()
     if len(clean_body) > 500:
         clean_body = clean_body[:500] + "..."
@@ -112,7 +135,6 @@ def create_notification(raw_data):
     # Structure the Discord Webhook Payload
     notification = {
         "username": "Glowforge Monitor",
-        "avatar_url": "https://i.imgur.com/your_logo_here.png", # Optional
         "embeds": [{
             "title": f"{subject}",
             "color": 12960,  # GV Blue
